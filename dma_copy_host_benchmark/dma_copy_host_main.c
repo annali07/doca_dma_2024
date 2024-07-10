@@ -20,7 +20,7 @@
 
 #include "dma_copy_core.h"
 
-DOCA_LOG_REGISTER(DMA_COPY);
+DOCA_LOG_REGISTER(DMA_COPY_HOST::MAIN);
 
 /*
  * DMA copy application main function
@@ -40,9 +40,12 @@ main(int argc, char **argv)
 	struct doca_dev *cc_dev = NULL;
 	struct doca_dev_rep *cc_dev_rep = NULL;
 	int exit_status = EXIT_SUCCESS;
+	dma_cfg.mode = DMA_COPY_MODE_HOST;
 
 #ifdef DOCA_ARCH_DPU
-	dma_cfg.mode = DMA_COPY_MODE_DPU;
+	DOCA_LOG_ERR("Sample can run only on the Host");
+	doca_argp_destroy();
+	return EXIT_FAILUREş
 #endif
 
 	/* Register a logger backend */
@@ -92,11 +95,7 @@ main(int argc, char **argv)
 		goto destroy_resources;
 	}
 
-	if (dma_cfg.mode == DMA_COPY_MODE_HOST)
-		result = host_start_dma_copy(&dma_cfg, &core_state, ep, &peer_addr);
-	else
-		result = dpu_start_dma_copy(&dma_cfg, &core_state, ep, &peer_addr);
-
+	result = host_start_dma_copy(&dma_cfg, &core_state, ep, &peer_addr);
 	if (result != DOCA_SUCCESS)
 		exit_status = EXIT_FAILURE;
 

@@ -18,9 +18,14 @@
 #include <doca_buf_inventory.h>
 #include <doca_log.h>
 
-#include "dma_copy_core.h"
+#include "dma_common.h"
 
 DOCA_LOG_REGISTER(DMA_COPY_HOST::MAIN);
+
+/* Sample's Logic */
+doca_error_t
+host_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, struct doca_comm_channel_ep_t *ep,
+		    struct doca_comm_channel_addr_t **peer_addr);
 
 /*
  * DMA copy application main function

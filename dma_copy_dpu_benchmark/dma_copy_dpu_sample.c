@@ -484,7 +484,7 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
     double latency, total_latency;
     double *latencies;
     int test_rounds;
-	if (total_loop_value = 0){
+	if (total_loop_value == 0){
 		test_rounds = DEFAULT_LOOP_SIZE;
 	}
 	else {

@@ -389,49 +389,21 @@ dpu_receive_addr_and_offset(struct doca_comm_channel_ep_t *ep, struct doca_comm_
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
 static doca_error_t
-dpu_submit_dma_job(struct dma_copy_cfg *cfg, struct core_state *core_state, size_t bytes_to_copy, char *buffer,
-		   struct doca_buf *local_doca_buf, struct doca_buf *remote_doca_buf)
-{
+dpu_submit_dma_job(struct dma_copy_cfg *cfg, struct core_state *core_state, char *buffer,
+		   struct doca_buf *src_buf, struct doca_buf *dst_buf)
+{	
 	struct doca_event event = {0};
 	struct doca_dma_job_memcpy dma_job = {0};
-	doca_error_t result;
-	void *data;
-	struct doca_buf *src_buf;
-	struct doca_buf *dst_buf;
 	struct timespec ts = {
 		.tv_sec = 0,
 		.tv_nsec = SLEEP_IN_NANOS,
 	};
-	// bytes_to_copy = file_size;
-
+	doca_error_t result;
+	
 	/* Construct DMA job */
 	dma_job.base.type = DOCA_DMA_JOB_MEMCPY;
-
 	dma_job.base.flags = DOCA_JOB_FLAGS_NONE;
 	dma_job.base.ctx = core_state->ctx;
-
-	/* Determine DMA copy direction */
-	if (cfg->is_file_found_locally) {
-		src_buf = local_doca_buf;
-		dst_buf = remote_doca_buf;
-	} else {
-		src_buf = remote_doca_buf;
-		dst_buf = local_doca_buf;
-	}
-
-	/* Set data position in src_buf */
-	result = doca_buf_get_data(src_buf, &data);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to get data address from DOCA buffer: %s", doca_get_error_string(result));
-		return result;
-	}
-
-	result = doca_buf_set_data(src_buf, data, bytes_to_copy);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Failed to set data for DOCA buffer: %s", doca_get_error_string(result));
-		return result;
-	}
-
 	dma_job.src_buff = src_buf;
 	dma_job.dst_buff = dst_buf;
 
@@ -587,13 +559,39 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
 			}
 		}
 
+		void *data;
+		struct doca_buf *src_buf;
+		struct doca_buf *dst_buf;
+
+		/* Determine DMA copy direction */
+		if (dma_cfg->is_file_found_locally) {
+			src_buf = local_doca_buf;
+			dst_buf = remote_doca_buf;
+		} else {
+			src_buf = remote_doca_buf;
+			dst_buf = local_doca_buf;
+		}
+
+		/* Set data position in src_buf */
+		result = doca_buf_get_data(src_buf, &data);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Failed to get data address from DOCA buffer: %s", doca_get_error_string(result));
+			return result;
+		}
+
+		result = doca_buf_set_data(src_buf, data, host_dma_offset);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Failed to set data for DOCA buffer: %s", doca_get_error_string(result));
+			return result;
+		}
+
 		if(clock_gettime(CLOCK_REALTIME, &start) == -1) {
 			perror("clock gettime");
 			return -1;
 		}
 
 		// Submit DMA job into the queue and wait until job completion
-		result = dpu_submit_dma_job(dma_cfg, core_state, host_dma_offset, buffer, local_doca_buf, remote_doca_buf);
+		result = dpu_submit_dma_job(dma_cfg, core_state, buffer, src_buf, dst_buf);
 		if (result != DOCA_SUCCESS) {
 			send_status_msg(ep, peer_addr, STATUS_FAILURE);
 			doca_buf_refcount_rm(local_doca_buf, NULL);
@@ -604,7 +602,7 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
 			return result;
 		}
 
-		if(clock_gettime( CLOCK_REALTIME, &stop) == -1) {
+		if(clock_gettime(CLOCK_REALTIME, &stop) == -1) {
 			perror("clock gettime");
 			return -1;
 		}

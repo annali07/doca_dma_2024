@@ -63,7 +63,9 @@ main(int argc, char **argv)
 		DOCA_LOG_ERR("Failed to init ARGP resources: %s", doca_get_error_string(result));
 		return EXIT_FAILURE;
 	}
+	
 	register_dma_copy_params();
+
 	result = doca_argp_start(argc, argv);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to parse application input: %s", doca_get_error_string(result));

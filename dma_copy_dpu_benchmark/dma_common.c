@@ -18,6 +18,8 @@
 #include <errno.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <ctype.h>
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
@@ -180,6 +182,35 @@ rep_pci_addr_callback(void *param, void *config)
 }
 
 /*
+ * ARGP Callback - Handle Total Loop
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+total_trials_callback(void *param, void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+	const char *total_loop = (char *)param;
+
+	if (isdigit(*total_loop)) {
+		int total_loop_value = *total_loop - '0';
+		if (total_loop_value > MAX_LOOP_SIZE || total_loop_value < 1) {
+			DOCA_LOG_INFO("Entered number of trials to be run exceeding the maximum size of %d or is non-positive", MAX_LOOP_SIZE);
+			return DOCA_ERROR_INVALID_VALUE;
+		}
+	}
+	else{
+		DOCA_LOG_INFO("Entered number of trials is not a numerical value.");
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+	strlcpy(cfg->total_loop, total_loop, MAX_LOOP_SIZE);
+
+	return DOCA_SUCCESS;
+}
+
+/*
  * Check if DOCA device is DMA capable
  *
  * @devinfo [in]: Device to check
@@ -312,7 +343,7 @@ doca_error_t
 register_dma_copy_params(void)
 {
 	doca_error_t result;
-	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param;
+	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param;
 
 	/* Create and register string to dma copy param */
 	result = doca_argp_param_create(&file_path_param);
@@ -365,6 +396,24 @@ register_dma_copy_params(void)
 	doca_argp_param_set_callback(rep_pci_addr_param, rep_pci_addr_callback);
 	doca_argp_param_set_type(rep_pci_addr_param, DOCA_ARGP_TYPE_STRING);
 	result = doca_argp_register_param(rep_pci_addr_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	/* Create and register Total Numer of Loops to be run */
+	result = doca_argp_param_create(&total_loop_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+		return result;
+	}
+	doca_argp_param_set_short_name(total_loop_param, "l");
+	doca_argp_param_set_long_name(total_loop_param, "loops_num");
+	doca_argp_param_set_description(total_loop_param,
+					"Total Trials to be run (needed only on DPU)");
+	doca_argp_param_set_callback(total_loop_param, total_trials_callback);
+	doca_argp_param_set_type(total_loop_param, DOCA_ARGP_TYPE_STRING);
+	result = doca_argp_register_param(total_loop_param);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
 		return result;

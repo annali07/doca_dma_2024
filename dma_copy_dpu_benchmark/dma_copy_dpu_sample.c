@@ -476,10 +476,20 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
 	size_t host_dma_offset, export_desc_len;
 	doca_error_t result;
 
+	int total_loop_value = atoi(dma_cfg->total_loop);
+	DOCA_LOG_INFO("Total Trials is %d", total_loop_value);
+	
+
 	struct timespec start, stop;
     double latency, total_latency;
     double *latencies;
-    int test_rounds = 1000000;
+    int test_rounds;
+	if (total_loop_value = 0){
+		test_rounds = DEFAULT_LOOP_SIZE;
+	}
+	else {
+		test_rounds = total_loop_value;
+	}
 
 	/* Negotiate DMA copy direction with Host */
 	result = dpu_negotiate_dma_direction_and_size(dma_cfg, ep, peer_addr);

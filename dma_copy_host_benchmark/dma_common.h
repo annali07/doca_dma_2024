@@ -24,6 +24,7 @@
 #define MAX_ARG_SIZE 128					/* PCI address and file path maximum length */
 #define MAX_DMA_BUF_SIZE (1024 * 1024)				/* DMA buffer maximum size */
 #define CC_MAX_MSG_SIZE 4080					/* Comm Channel message maximum size */
+#define MAX_LOOP_SIZE 1000000
 #define SERVER_NAME "dma copy server"				/* Comm Channel service name */
 
 enum dma_copy_mode {
@@ -47,6 +48,7 @@ struct dma_copy_cfg {
 	char cc_dev_rep_pci_addr[DOCA_DEVINFO_REP_PCI_ADDR_SIZE]; /* Comm Channel DOCA device representor PCI address */
 	bool is_file_found_locally;				  /* Indicate DMA copy direction */
 	uint32_t file_size;					  /* File size in bytes */
+	char total_loop[8];
 };
 
 struct core_state {

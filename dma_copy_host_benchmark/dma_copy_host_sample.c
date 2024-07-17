@@ -330,6 +330,8 @@ doca_error_t
 host_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, struct doca_comm_channel_ep_t *ep,
 		    struct doca_comm_channel_addr_t **peer_addr)
 {
+	int total_loop_value = atoi(dma_cfg->total_loop);
+	DOCA_LOG_INFO("Total Trials is %d", total_loop_value);
 
 	doca_error_t result;
 	char *buffer = NULL;

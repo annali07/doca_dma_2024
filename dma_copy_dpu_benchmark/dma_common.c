@@ -503,7 +503,7 @@ register_dma_copy_params(void)
 	doca_argp_param_set_short_name(target_metric_param, "t");
 	doca_argp_param_set_long_name(target_metric_param, "target_metric");
 	doca_argp_param_set_description(target_metric_param,
-					"Target metric of the DMA operation.\n1 All\n2 Min\n3 Max\n4 50th\n5 90th\n6 99th\n7 99.9th\n8 99.99th");
+					"Target metric of the DMA operation (needed only on dpu).\n\t\t\t\t\t\t1 All\n\t\t\t\t\t\t2 Min\n\t\t\t\t\t\t3 Max\n\t\t\t\t\t\t4 50th\n\t\t\t\t\t\t5 90th\n\t\t\t\t\t\t6 99th\n\t\t\t\t\t\t7 99.9th\n\t\t\t\t\t\t8 99.99th");
 	doca_argp_param_set_callback(target_metric_param, target_metric_callback);
 	doca_argp_param_set_type(target_metric_param, DOCA_ARGP_TYPE_STRING);
 	result = doca_argp_register_param(target_metric_param);

@@ -622,27 +622,65 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
 			
 		}	
 	}
-
-	long file_size = (long) host_dma_offset; // IMPORTANT AND MANUALLY INPUT
+	
+	int target_metric_value = atoi(dma_cfg->target_metric);
+	DOCA_LOG_INFO("Target Metric is %d", target_metric_value);
+	
+    int target_metric;
+	if (target_metric_value == 0){
+		target_metric = DEFAULT_TARGET_METRIC;
+	}
+	else {
+		target_metric = target_metric_value;
+	}
 
 	Statistics LatencyStats;
-        Percentiles PercentileStats;
-        GetStatistics(latencies, (size_t)test_rounds, &LatencyStats, &PercentileStats);
-        printf(
-                "Result for %d requests of %ld bytes (%.2lf seconds): %.2lf RPS, Min: %.2lf, Max: %.2lf, 50th: %.2lf, 90th: %.2lf, 99th: %.2lf, 99.9th: %.2lf, 99.99th: %.2lf, StdErr: %.2lf\n",
-                test_rounds,
-                file_size,
-                (total_latency / 1000000),
-                (test_rounds / total_latency * 1000000),
-                LatencyStats.Min,
-                LatencyStats.Max,
-                PercentileStats.P50,
-                PercentileStats.P90,
-                PercentileStats.P99,
-                PercentileStats.P99p9,
-                PercentileStats.P99p99,
-                LatencyStats.StandardError);
-
+	Percentiles PercentileStats;
+	GetStatistics(latencies, (size_t)test_rounds, &LatencyStats, &PercentileStats);
+	printf(
+		"Result for %d requests of %ld bytes (%.2lf seconds):\nRPS: %.2lf RPS\nStdErr: %.2lf\n", 
+		test_rounds,
+		(long) host_dma_offset,
+		(total_latency / 1000000),
+		(test_rounds / total_latency * 1000000),
+		LatencyStats.StandardError
+	);
+	switch (target_metric) {
+        case 1:
+            printf("Min: %.2lf, Max: %.2lf, 50th: %.2lf, 90th: %.2lf, 99th: %.2lf, 99.9th: %.2lf, 99.99th: %.2lf\n",
+                   LatencyStats.Min,
+                   LatencyStats.Max,
+                   PercentileStats.P50,
+                   PercentileStats.P90,
+                   PercentileStats.P99,
+                   PercentileStats.P99p9,
+                   PercentileStats.P99p99);
+            break;
+        case 2:
+            printf("Min: %.2lf\n", LatencyStats.Min);
+            break;
+        case 3:
+            printf("Max: %.2lf\n", LatencyStats.Max);
+            break;
+        case 4:
+            printf("50th: %.2lf\n", PercentileStats.P50);
+            break;
+        case 5:
+            printf("90th: %.2lf\n", PercentileStats.P90);
+            break;
+        case 6:
+            printf("99th: %.2lf\n", PercentileStats.P99);
+            break;
+        case 7:
+            printf("99.9th: %.2lf\n", PercentileStats.P99p9);
+            break;
+        case 8:
+            printf("99.99th: %.2lf\n", PercentileStats.P99p99);
+            break;
+        default:
+            printf("Invalid target metric.\n");
+            break;
+    }
 	free(latencies);
 
 	send_status_msg(ep, peer_addr, STATUS_SUCCESS);

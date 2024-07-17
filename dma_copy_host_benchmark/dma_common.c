@@ -225,15 +225,44 @@ workq_depth_callback(void *param, void *config)
 	if (isdigit(*workq_depth)) {
 		int workq_depth_value = *workq_depth - '0';
 		if (workq_depth_value > MAX_WORKQ_DEPTH || workq_depth_value < 1) {
-			DOCA_LOG_INFO("Entered workq depth exceeding the maximum size of %d or is non-positive", MAX_WORKQ_DEPTH);
+			DOCA_LOG_INFO("Entered number of trials to be run exceeding the maximum size of %d or is non-positive", MAX_WORKQ_DEPTH);
 			return DOCA_ERROR_INVALID_VALUE;
 		}
 	}
 	else{
-		DOCA_LOG_INFO("Entered workq depth is not a numerical value.");
+		DOCA_LOG_INFO("Entered number of trials is not a numerical value.");
 		return DOCA_ERROR_INVALID_VALUE;
 	}
 	strlcpy(cfg->workq_depth, workq_depth, MAX_WORKQ_DEPTH);
+
+	return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP Callback - Target Metric
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+target_metric_callback(void *param, void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+	const char *target_metric = (char *)param;
+
+	if (isdigit(*target_metric)) {
+		int target_metric_value = *target_metric - '0';
+		if (target_metric_value > MAX_TARGET_METRIC || target_metric_value < 1) {
+			DOCA_LOG_INFO("Entered target metric number is not within the range of 1 to %d", MAX_TARGET_METRIC);
+			return DOCA_ERROR_INVALID_VALUE;
+		}
+	}
+	else{
+		DOCA_LOG_INFO("Entered target metric is not a numerical value.");
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+	strlcpy(cfg->target_metric, target_metric, MAX_TARGET_METRIC);
 
 	return DOCA_SUCCESS;
 }
@@ -371,7 +400,7 @@ doca_error_t
 register_dma_copy_params(void)
 {
 	doca_error_t result;
-	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param, *workq_depth_param;
+	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param, *workq_depth_param, *target_metric_param;
 
 	/* Create and register string to dma copy param */
 	result = doca_argp_param_create(&file_path_param);
@@ -460,6 +489,24 @@ register_dma_copy_params(void)
 	doca_argp_param_set_callback(workq_depth_param, workq_depth_callback);
 	doca_argp_param_set_type(workq_depth_param, DOCA_ARGP_TYPE_STRING);
 	result = doca_argp_register_param(workq_depth_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	/* Create and register target metric */
+	result = doca_argp_param_create(&target_metric_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+		return result;
+	}
+	doca_argp_param_set_short_name(target_metric_param, "t");
+	doca_argp_param_set_long_name(target_metric_param, "target_metric");
+	doca_argp_param_set_description(target_metric_param,
+					"Target metric of the DMA operation.\n1 All\n2 Min\n3 Max\n4 50th\n5 90th\n6 99th\n7 99.9th\n8 99.99th");
+	doca_argp_param_set_callback(target_metric_param, target_metric_callback);
+	doca_argp_param_set_type(target_metric_param, DOCA_ARGP_TYPE_STRING);
+	result = doca_argp_register_param(target_metric_param);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
 		return result;

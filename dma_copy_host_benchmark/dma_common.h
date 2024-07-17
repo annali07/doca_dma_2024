@@ -28,6 +28,8 @@
 #define DEFAULT_LOOP_SIZE 1000
 #define MAX_WORKQ_DEPTH 100
 #define DEFAULT_WORKQ_DEPTH 32
+#define MAX_TARGET_METRIC 8
+#define DEFAULT_TARGET_METRIC 1
 #define SERVER_NAME "dma copy server"				/* Comm Channel service name */
 
 enum dma_copy_mode {
@@ -53,6 +55,7 @@ struct dma_copy_cfg {
 	uint32_t file_size;					  /* File size in bytes */
 	char total_loop[8];
 	char workq_depth[8];
+	char target_metric[4];
 };
 
 struct core_state {

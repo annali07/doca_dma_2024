@@ -148,7 +148,8 @@ source_path = 'src'
 bin_path = 'bin'
 
 app_list = [
-    'dma_copy_host_benchmark'
+    'dma_copy_host_benchmark',
+	'dma_copy_dpu_benchmark'
 ]
 
 grpc_extended_apps = [

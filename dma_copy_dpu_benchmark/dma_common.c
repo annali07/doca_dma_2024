@@ -1,0 +1,513 @@
+/*
+ * Copyright (c) 2022-2023 NVIDIA CORPORATION & AFFILIATES, ALL RIGHTS RESERVED.
+ *
+ * This software product is a proprietary product of NVIDIA CORPORATION &
+ * AFFILIATES (the "Company") and all right, title, and interest in and to the
+ * software product, including all associated intellectual property rights, are
+ * and shall remain exclusively with the Company.
+ *
+ * This software product is governed by the End User License Agreement
+ * provided with the software product.
+ *
+ */
+
+#include <stdint.h>
+#include <string.h>
+#include <time.h>
+#include <netinet/in.h>
+#include <errno.h>
+#include <sys/epoll.h>
+#include <unistd.h>
+
+#include <doca_buf.h>
+#include <doca_buf_inventory.h>
+#include <doca_ctx.h>
+#include <doca_dev.h>
+#include <doca_dma.h>
+#include <doca_mmap.h>
+
+#include <samples/common.h>
+
+#include "pack.h"
+#include "utils.h"
+
+#include "dma_common.h"
+
+#define CC_MAX_QUEUE_SIZE 10	   /* Max number of messages on Comm Channel queue */
+#define WORKQ_DEPTH 32		   /* Work queue depth */
+#define SLEEP_IN_NANOS (10 * 1000) /* Sample the job every 10 microseconds  */
+#define STATUS_SUCCESS true	   /* Successful status */
+#define STATUS_FAILURE false	   /* Unsuccessful status */
+
+DOCA_LOG_REGISTER(DMA_COPY_CORE);
+
+/*
+ * Validate file size
+ *
+ * @file_path [in]: File to validate
+ * @file_size [out]: File size
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+validate_file_size(const char *file_path, uint32_t *file_size)
+{
+	FILE *fp;
+	long size;
+
+	fp = fopen(file_path, "r");
+	if (fp == NULL) {
+		DOCA_LOG_ERR("Failed to open %s", file_path);
+		return DOCA_ERROR_IO_FAILED;
+	}
+
+	if (fseek(fp, 0, SEEK_END) != 0) {
+		DOCA_LOG_ERR("Failed to calculate file size");
+		fclose(fp);
+		return DOCA_ERROR_IO_FAILED;
+	}
+
+	size = ftell(fp);
+	if (size == -1) {
+		DOCA_LOG_ERR("Failed to calculate file size");
+		fclose(fp);
+		return DOCA_ERROR_IO_FAILED;
+	}
+
+	fclose(fp);
+
+	if (size > MAX_DMA_BUF_SIZE) {
+		DOCA_LOG_ERR("File size of %ld is larger than DMA buffer maximum size of %d", size, MAX_DMA_BUF_SIZE);
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+
+	DOCA_LOG_INFO("The file size is %ld", size);
+
+	*file_size = size;
+
+	return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP validation Callback - check if input file exists
+ *
+ * @config [in]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+args_validation_callback(void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+
+	if (access(cfg->file_path, F_OK | R_OK) == 0) {
+		cfg->is_file_found_locally = true;
+		return validate_file_size(cfg->file_path, &cfg->file_size);
+	}
+
+	return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP Callback - Handle Comm Channel DOCA device PCI address parameter
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+dev_pci_addr_callback(void *param, void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+	const char *dev_pci_addr = (char *)param;
+
+	if (strnlen(dev_pci_addr, DOCA_DEVINFO_PCI_ADDR_SIZE) == DOCA_DEVINFO_PCI_ADDR_SIZE) {
+		DOCA_LOG_ERR("Entered device PCI address exceeding the maximum size of %d", DOCA_DEVINFO_PCI_ADDR_SIZE - 1);
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+
+	strlcpy(cfg->cc_dev_pci_addr, dev_pci_addr, DOCA_DEVINFO_PCI_ADDR_SIZE);
+
+	return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP Callback - Handle file parameter
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+file_path_callback(void *param, void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+	char *file_path = (char *)param;
+	int file_path_len = strnlen(file_path, MAX_ARG_SIZE);
+
+	if (file_path_len == MAX_ARG_SIZE) {
+		DOCA_LOG_ERR("Entered file path exceeded buffer size - MAX=%d", MAX_ARG_SIZE - 1);
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+
+	strlcpy(cfg->file_path, file_path, MAX_ARG_SIZE);
+
+	return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP Callback - Handle Comm Channel DOCA device representor PCI address parameter
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+rep_pci_addr_callback(void *param, void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+	const char *rep_pci_addr = (char *)param;
+
+	if (cfg->mode == DMA_COPY_MODE_DPU) {
+		if (strnlen(rep_pci_addr, DOCA_DEVINFO_REP_PCI_ADDR_SIZE) == DOCA_DEVINFO_REP_PCI_ADDR_SIZE) {
+			DOCA_LOG_ERR("Entered device representor PCI address exceeding the maximum size of %d",
+				     DOCA_DEVINFO_REP_PCI_ADDR_SIZE - 1);
+			return DOCA_ERROR_INVALID_VALUE;
+		}
+
+		strlcpy(cfg->cc_dev_rep_pci_addr, rep_pci_addr, DOCA_DEVINFO_REP_PCI_ADDR_SIZE);
+	}
+
+	return DOCA_SUCCESS;
+}
+
+/*
+ * Check if DOCA device is DMA capable
+ *
+ * @devinfo [in]: Device to check
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t check_dev_dma_capable(struct doca_devinfo *devinfo)
+{
+	return doca_dma_job_get_supported(devinfo, DOCA_DMA_JOB_MEMCPY);
+}
+
+/*
+ * Set Comm Channel properties
+ *
+ * @mode [in]: Running mode
+ * @ep [in]: DOCA comm_channel endpoint
+ * @dev [in]: DOCA device object to use
+ * @dev_rep [in]: DOCA device representor object to use
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+set_cc_properties(enum dma_copy_mode mode, struct doca_comm_channel_ep_t *ep, struct doca_dev *dev, struct doca_dev_rep *dev_rep)
+{
+	doca_error_t result;
+
+	result = doca_comm_channel_ep_set_device(ep, dev);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to set DOCA device property");
+		return result;
+	}
+
+	result = doca_comm_channel_ep_set_max_msg_size(ep, CC_MAX_MSG_SIZE);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to set max_msg_size property");
+		return result;
+	}
+
+	result = doca_comm_channel_ep_set_send_queue_size(ep, CC_MAX_QUEUE_SIZE);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to set snd_queue_size property");
+		return result;
+	}
+
+	result = doca_comm_channel_ep_set_recv_queue_size(ep, CC_MAX_QUEUE_SIZE);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to set rcv_queue_size property");
+		return result;
+	}
+
+	if (mode == DMA_COPY_MODE_DPU) {
+		result = doca_comm_channel_ep_set_device_rep(ep, dev_rep);
+		if (result != DOCA_SUCCESS)
+			DOCA_LOG_ERR("Failed to set DOCA device representor property");
+	}
+
+	return result;
+}
+
+void
+destroy_cc(struct doca_comm_channel_ep_t *ep, struct doca_comm_channel_addr_t *peer,
+	   struct doca_dev *dev, struct doca_dev_rep *dev_rep)
+{
+	doca_error_t result;
+
+	if (peer != NULL) {
+		result = doca_comm_channel_ep_disconnect(ep, peer);
+		if (result != DOCA_SUCCESS)
+			DOCA_LOG_ERR("Failed to disconnect from Comm Channel peer address: %s",
+				     doca_get_error_string(result));
+	}
+
+	result = doca_comm_channel_ep_destroy(ep);
+	if (result != DOCA_SUCCESS)
+		DOCA_LOG_ERR("Failed to destroy Comm Channel endpoint: %s", doca_get_error_string(result));
+
+	if (dev_rep != NULL) {
+		result = doca_dev_rep_close(dev_rep);
+		if (result != DOCA_SUCCESS)
+			DOCA_LOG_ERR("Failed to close Comm Channel DOCA device representor: %s",
+				     doca_get_error_string(result));
+	}
+
+	result = doca_dev_close(dev);
+	if (result != DOCA_SUCCESS)
+		DOCA_LOG_ERR("Failed to close Comm Channel DOCA device: %s", doca_get_error_string(result));
+}
+
+doca_error_t
+init_cc(struct dma_copy_cfg *cfg, struct doca_comm_channel_ep_t **ep, struct doca_dev **dev,
+	struct doca_dev_rep **dev_rep)
+{
+	doca_error_t result;
+
+	result = doca_comm_channel_ep_create(ep);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create Comm Channel endpoint: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	result = open_doca_device_with_pci(cfg->cc_dev_pci_addr, NULL, dev);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to open Comm Channel DOCA device based on PCI address");
+		doca_comm_channel_ep_destroy(*ep);
+		return result;
+	}
+
+	/* Open DOCA device representor on DPU side */
+	if (cfg->mode == DMA_COPY_MODE_DPU) {
+		result = open_doca_device_rep_with_pci(*dev, DOCA_DEV_REP_FILTER_NET, cfg->cc_dev_rep_pci_addr, dev_rep);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Failed to open Comm Channel DOCA device representor based on PCI address");
+			doca_comm_channel_ep_destroy(*ep);
+			doca_dev_close(*dev);
+			return result;
+		}
+	}
+
+	result = set_cc_properties(cfg->mode, *ep, *dev, *dev_rep);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to set Comm Channel properties");
+		doca_comm_channel_ep_destroy(*ep);
+		if (cfg->mode == DMA_COPY_MODE_DPU)
+			doca_dev_rep_close(*dev_rep);
+		doca_dev_close(*dev);
+	}
+
+	return result;
+}
+
+doca_error_t
+register_dma_copy_params(void)
+{
+	doca_error_t result;
+	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param;
+
+	/* Create and register string to dma copy param */
+	result = doca_argp_param_create(&file_path_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+		return result;
+	}
+	doca_argp_param_set_short_name(file_path_param, "f");
+	doca_argp_param_set_long_name(file_path_param, "file");
+	doca_argp_param_set_description(file_path_param,
+					"Full path to file to be copied/created after a successful DMA copy");
+	doca_argp_param_set_callback(file_path_param, file_path_callback);
+	doca_argp_param_set_type(file_path_param, DOCA_ARGP_TYPE_STRING);
+	doca_argp_param_set_mandatory(file_path_param);
+	result = doca_argp_register_param(file_path_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	/* Create and register Comm Channel DOCA device PCI address */
+	result = doca_argp_param_create(&dev_pci_addr_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+		return result;
+	}
+	doca_argp_param_set_short_name(dev_pci_addr_param, "p");
+	doca_argp_param_set_long_name(dev_pci_addr_param, "pci-addr");
+	doca_argp_param_set_description(dev_pci_addr_param,
+					"DOCA Comm Channel device PCI address");
+	doca_argp_param_set_callback(dev_pci_addr_param, dev_pci_addr_callback);
+	doca_argp_param_set_type(dev_pci_addr_param, DOCA_ARGP_TYPE_STRING);
+	doca_argp_param_set_mandatory(dev_pci_addr_param);
+	result = doca_argp_register_param(dev_pci_addr_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	/* Create and register Comm Channel DOCA device representor PCI address */
+	result = doca_argp_param_create(&rep_pci_addr_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+		return result;
+	}
+	doca_argp_param_set_short_name(rep_pci_addr_param, "r");
+	doca_argp_param_set_long_name(rep_pci_addr_param, "rep-pci");
+	doca_argp_param_set_description(rep_pci_addr_param,
+					"DOCA Comm Channel device representor PCI address (needed only on DPU)");
+	doca_argp_param_set_callback(rep_pci_addr_param, rep_pci_addr_callback);
+	doca_argp_param_set_type(rep_pci_addr_param, DOCA_ARGP_TYPE_STRING);
+	result = doca_argp_register_param(rep_pci_addr_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	/* Register validation callback */
+	result = doca_argp_register_validation_callback(args_validation_callback);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program validation callback: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	/* Register version callback for DOCA SDK & RUNTIME */
+	result = doca_argp_register_version_callback(sdk_version_callback);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register version callback: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	return DOCA_SUCCESS;
+}
+
+doca_error_t
+open_dma_device(struct doca_dev **dev)
+{
+	doca_error_t result;
+
+	result = open_doca_device_with_capabilities(check_dev_dma_capable, dev);
+	if (result != DOCA_SUCCESS)
+		DOCA_LOG_ERR("Failed to open DOCA DMA capable device");
+
+	return result;
+}
+
+doca_error_t
+create_core_objs(struct core_state *state, enum dma_copy_mode mode)
+{
+	doca_error_t result;
+	size_t num_elements = 2;
+
+	result = doca_mmap_create(NULL, &state->mmap);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to create mmap: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	if (mode == DMA_COPY_MODE_HOST)
+		return DOCA_SUCCESS;
+
+	result = doca_buf_inventory_create(NULL, num_elements, DOCA_BUF_EXTENSION_NONE, &state->buf_inv);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to create buffer inventory: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	result = doca_dma_create(&(state->dma_ctx));
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to create DMA engine: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	state->ctx = doca_dma_as_ctx(state->dma_ctx);
+
+	result = doca_workq_create(WORKQ_DEPTH, &(state->workq));
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to create work queue: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	return result;
+}
+
+doca_error_t
+init_core_objs(struct core_state *state, struct dma_copy_cfg *cfg)
+{
+	doca_error_t result;
+
+	result = doca_mmap_dev_add(state->mmap, state->dev);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to add device to mmap: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	if (cfg->mode == DMA_COPY_MODE_HOST)
+		return DOCA_SUCCESS;
+
+	result = doca_buf_inventory_start(state->buf_inv);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to start buffer inventory: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	result = doca_ctx_dev_add(state->ctx, state->dev);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to register device with DMA context: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	result = doca_ctx_start(state->ctx);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to start DMA context: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	result = doca_ctx_workq_add(state->ctx, state->workq);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Unable to register work queue with context: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	return result;
+}
+
+void
+destroy_core_objs(struct core_state *state, struct dma_copy_cfg *cfg)
+{
+	doca_error_t result;
+
+	if (cfg->mode == DMA_COPY_MODE_DPU) {
+		result = doca_workq_destroy(state->workq);
+		if (result != DOCA_SUCCESS)
+			DOCA_LOG_ERR("Failed to destroy work queue: %s", doca_get_error_string(result));
+		state->workq = NULL;
+
+		result = doca_dma_destroy(state->dma_ctx);
+		if (result != DOCA_SUCCESS)
+			DOCA_LOG_ERR("Failed to destroy dma: %s", doca_get_error_string(result));
+		state->dma_ctx = NULL;
+		state->ctx = NULL;
+
+		result = doca_buf_inventory_destroy(state->buf_inv);
+		if (result != DOCA_SUCCESS)
+			DOCA_LOG_ERR("Failed to destroy buf inventory: %s", doca_get_error_string(result));
+		state->buf_inv = NULL;
+	}
+
+	result = doca_mmap_destroy(state->mmap);
+	if (result != DOCA_SUCCESS)
+		DOCA_LOG_ERR("Failed to destroy mmap: %s", doca_get_error_string(result));
+	state->mmap = NULL;
+
+	result = doca_dev_close(state->dev);
+	if (result != DOCA_SUCCESS)
+		DOCA_LOG_ERR("Failed to close device: %s", doca_get_error_string(result));
+	state->dev = NULL;
+}

@@ -34,3 +34,5 @@ option('enable_developer_log', type: 'boolean', value: false,
 # Enables per application - turned off by default
 option('enable_dma_copy_host_benchmark', type: 'boolean', value: true,
 	description: 'Enable dma_copy_host_benchmark')
+option('enable_dma_copy_dpu_benchmark', type: 'boolean', value: true,
+	description: 'Enable dma_copy_dpu_benchmark')

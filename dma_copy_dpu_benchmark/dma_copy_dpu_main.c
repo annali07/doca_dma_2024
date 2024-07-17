@@ -20,11 +20,11 @@
 
 #include "dma_common.h"
 
-DOCA_LOG_REGISTER(DMA_COPY_HOST::MAIN);
+DOCA_LOG_REGISTER(DMA_COPY_HOST::DPU);
 
 /* Sample's Logic */
 doca_error_t
-host_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, struct doca_comm_channel_ep_t *ep,
+dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, struct doca_comm_channel_ep_t *ep,
 		    struct doca_comm_channel_addr_t **peer_addr);
 
 /*
@@ -45,10 +45,10 @@ main(int argc, char **argv)
 	struct doca_dev *cc_dev = NULL;
 	struct doca_dev_rep *cc_dev_rep = NULL;
 	int exit_status = EXIT_SUCCESS;
-	dma_cfg.mode = DMA_COPY_MODE_HOST;
+	dma_cfg.mode = DMA_COPY_MODE_DPU;
 
-#ifdef DOCA_ARCH_DPU
-	DOCA_LOG_ERR("Sample can run only on the Host");
+#ifdef DOCA_ARCH_HOST
+	DOCA_LOG_ERR("Sample can run only on the DPU");
 	doca_argp_destroy();
 	return EXIT_FAILURE;
 #endif
@@ -100,7 +100,7 @@ main(int argc, char **argv)
 		goto destroy_resources;
 	}
 
-	result = host_start_dma_copy(&dma_cfg, &core_state, ep, &peer_addr);
+	result = dpu_start_dma_copy(&dma_cfg, &core_state, ep, &peer_addr);
 	if (result != DOCA_SUCCESS)
 		exit_status = EXIT_FAILURE;
 

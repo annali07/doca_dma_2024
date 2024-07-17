@@ -36,7 +36,6 @@
 #include "dma_common.h"
 
 #define CC_MAX_QUEUE_SIZE 10	   /* Max number of messages on Comm Channel queue */
-#define WORKQ_DEPTH 32		   /* Work queue depth */
 #define SLEEP_IN_NANOS (10 * 1000) /* Sample the job every 10 microseconds  */
 #define STATUS_SUCCESS true	   /* Successful status */
 #define STATUS_FAILURE false	   /* Unsuccessful status */
@@ -211,6 +210,35 @@ total_trials_callback(void *param, void *config)
 }
 
 /*
+ * ARGP Callback - WorkQ Depth
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+workq_depth_callback(void *param, void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+	const char *workq_depth = (char *)param;
+
+	if (isdigit(*workq_depth)) {
+		int workq_depth_value = *workq_depth - '0';
+		if (workq_depth_value > MAX_WORKQ_DEPTH || workq_depth_value < 1) {
+			DOCA_LOG_INFO("Entered number of trials to be run exceeding the maximum size of %d or is non-positive", MAX_WORKQ_DEPTH);
+			return DOCA_ERROR_INVALID_VALUE;
+		}
+	}
+	else{
+		DOCA_LOG_INFO("Entered number of trials is not a numerical value.");
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+	strlcpy(cfg->workq_depth, workq_depth, MAX_WORKQ_DEPTH);
+
+	return DOCA_SUCCESS;
+}
+
+/*
  * Check if DOCA device is DMA capable
  *
  * @devinfo [in]: Device to check
@@ -343,7 +371,7 @@ doca_error_t
 register_dma_copy_params(void)
 {
 	doca_error_t result;
-	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param;
+	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param, *workq_depth_param;
 
 	/* Create and register string to dma copy param */
 	result = doca_argp_param_create(&file_path_param);
@@ -419,6 +447,24 @@ register_dma_copy_params(void)
 		return result;
 	}
 
+	/* Create and register Workq depth */
+	result = doca_argp_param_create(&workq_depth_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+		return result;
+	}
+	doca_argp_param_set_short_name(workq_depth_param, "q");
+	doca_argp_param_set_long_name(workq_depth_param, "workq_depth");
+	doca_argp_param_set_description(workq_depth_param,
+					"The WorkQ depth of the operation");
+	doca_argp_param_set_callback(workq_depth_param, workq_depth_callback);
+	doca_argp_param_set_type(workq_depth_param, DOCA_ARGP_TYPE_STRING);
+	result = doca_argp_register_param(workq_depth_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+		return result;
+	}
+
 	/* Register validation callback */
 	result = doca_argp_register_validation_callback(args_validation_callback);
 	if (result != DOCA_SUCCESS) {
@@ -449,7 +495,7 @@ open_dma_device(struct doca_dev **dev)
 }
 
 doca_error_t
-create_core_objs(struct core_state *state, enum dma_copy_mode mode)
+create_core_objs(struct core_state *state, enum dma_copy_mode mode, struct dma_copy_cfg *dma_cfg)
 {
 	doca_error_t result;
 	size_t num_elements = 2;
@@ -477,7 +523,18 @@ create_core_objs(struct core_state *state, enum dma_copy_mode mode)
 
 	state->ctx = doca_dma_as_ctx(state->dma_ctx);
 
-	result = doca_workq_create(WORKQ_DEPTH, &(state->workq));
+	int workq_depth;
+	int workq_depth_val = atoi(dma_cfg->workq_depth);
+	DOCA_LOG_INFO("WorkQ depth is %d", workq_depth_val);
+	
+	if (workq_depth_val == 0){
+		workq_depth = DEFAULT_WORKQ_DEPTH;
+	}
+	else {
+		workq_depth = workq_depth_val;
+	}
+
+	result = doca_workq_create((uint32_t) workq_depth, &(state->workq));
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Unable to create work queue: %s", doca_get_error_string(result));
 		return result;

@@ -13,5 +13,4 @@ ninja
 cd dma_copy_host_benchmark
 
 # Step 5: Execute the built executable with the specified arguments
-./doca_dma_copy_host_benchmark -f /home/annali/testfile.txt -p e1:00.1
-
+./doca_dma_copy_host_benchmark -f /home/annali/testfile.txt -p e1:00.1 -q 50

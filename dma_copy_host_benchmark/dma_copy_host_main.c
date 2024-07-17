@@ -20,7 +20,7 @@
 
 #include "dma_common.h"
 
-DOCA_LOG_REGISTER(DMA_COPY_HOST::MAIN);
+DOCA_LOG_REGISTER(DMA_COPY_HOST::HOST);
 
 /* Sample's Logic */
 doca_error_t
@@ -63,7 +63,9 @@ main(int argc, char **argv)
 		DOCA_LOG_ERR("Failed to init ARGP resources: %s", doca_get_error_string(result));
 		return EXIT_FAILURE;
 	}
+	
 	register_dma_copy_params();
+
 	result = doca_argp_start(argc, argv);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to parse application input: %s", doca_get_error_string(result));
@@ -85,7 +87,7 @@ main(int argc, char **argv)
 	}
 
 	/* Create DOCA core objects */
-	result = create_core_objs(&core_state, dma_cfg.mode);
+	result = create_core_objs(&core_state, dma_cfg.mode, &dma_cfg);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create DOCA core structures");
 		exit_status = EXIT_FAILURE;

@@ -25,6 +25,9 @@
 #define MAX_DMA_BUF_SIZE (1024 * 1024)				/* DMA buffer maximum size */
 #define CC_MAX_MSG_SIZE 4080					/* Comm Channel message maximum size */
 #define MAX_LOOP_SIZE 1000000
+#define DEFAULT_LOOP_SIZE 1000
+#define MAX_WORKQ_DEPTH 100
+#define DEFAULT_WORKQ_DEPTH 32
 #define SERVER_NAME "dma copy server"				/* Comm Channel service name */
 
 enum dma_copy_mode {
@@ -49,6 +52,7 @@ struct dma_copy_cfg {
 	bool is_file_found_locally;				  /* Indicate DMA copy direction */
 	uint32_t file_size;					  /* File size in bytes */
 	char total_loop[8];
+	char workq_depth[8];
 };
 
 struct core_state {
@@ -105,7 +109,7 @@ doca_error_t open_dma_device(struct doca_dev **dev);
  * @mode [in]: running mode {host, dpu}
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
-doca_error_t create_core_objs(struct core_state *state, enum dma_copy_mode mode);
+doca_error_t create_core_objs(struct core_state *state, enum dma_copy_mode mode, struct dma_copy_cfg *dma_cfg);
 
 /*
  * Init DOCA core objects

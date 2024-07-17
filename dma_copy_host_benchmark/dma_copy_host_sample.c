@@ -34,7 +34,6 @@
 #include "dma_common.h"
 
 #define CC_MAX_QUEUE_SIZE 10	   /* Max number of messages on Comm Channel queue */
-#define WORKQ_DEPTH 32		   /* Work queue depth */
 #define SLEEP_IN_NANOS (10 * 1000) /* Sample the job every 10 microseconds  */
 #define STATUS_SUCCESS true	   /* Successful status */
 #define STATUS_FAILURE false	   /* Unsuccessful status */

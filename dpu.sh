@@ -14,4 +14,4 @@ cd dma_copy_dpu_benchmark
 
 # Step 5: Execute the built executable with the specified arguments
 
-./doca_dma_copy_dpu_benchmark -f /home/ubuntu/dma/doca/applications/build/dma_copy/src/Test-Files/64k.txt -p 03:00.1 -r e1:00.1 -l 10000 -q 50 -t 2
+./doca_dma_copy_dpu_benchmark -p 03:00.1 -r e1:00.1 -l 10000 -q 50 -t 1 -f 8

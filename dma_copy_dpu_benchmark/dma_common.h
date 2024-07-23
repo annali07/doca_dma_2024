@@ -30,6 +30,8 @@
 #define DEFAULT_WORKQ_DEPTH 32
 #define MAX_TARGET_METRIC 8
 #define DEFAULT_TARGET_METRIC 1
+#define MAX_FILE_SIZE 1048576
+#define DEFAULT_FILE_SIZE 64
 #define SERVER_NAME "dma copy server"				/* Comm Channel service name */
 
 enum dma_copy_mode {

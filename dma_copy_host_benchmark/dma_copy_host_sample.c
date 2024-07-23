@@ -77,35 +77,6 @@ wait_for_successful_status_msg(struct doca_comm_channel_ep_t *ep, struct doca_co
 }
 
 /*
- * Fill local buffer with file content
- *
- * @cfg [in]: Application configuration
- * @buffer [out]: Buffer to save information into
- * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
- */
-static doca_error_t
-fill_buffer_with_file_content(struct dma_copy_cfg *cfg, char *buffer)
-{
-	FILE *fp;
-
-	fp = fopen(cfg->file_path, "r");
-	if (fp == NULL) {
-		DOCA_LOG_ERR("Failed to open %s", cfg->file_path);
-		return DOCA_ERROR_IO_FAILED;
-	}
-
-	/* Read file content and store it in the local buffer which will be exported */
-	if (fread(buffer, 1, cfg->file_size, fp) != cfg->file_size) {
-		DOCA_LOG_ERR("Failed to read content from file: %s", cfg->file_path);
-		fclose(fp);
-		return DOCA_ERROR_IO_FAILED;
-	}
-	fclose(fp);
-
-	return DOCA_SUCCESS;
-}
-
-/*
  * Host side function for file size and location negotiation
  *
  * @cfg [in]: Application configuration
@@ -353,15 +324,6 @@ host_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state,
 	if (result != DOCA_SUCCESS) {
 		free(buffer);
 		return result;
-	}
-
-	/* Fill the buffer before DPU starts DMA operation */
-	if (dma_cfg->is_file_found_locally) {
-		result = fill_buffer_with_file_content(dma_cfg, buffer);
-		if (result != DOCA_SUCCESS) {
-			free(buffer);
-			return result;
-		}
 	}
 
 	/* Send source buffer address and offset (entire buffer) to enable DMA and wait until DPU is done */

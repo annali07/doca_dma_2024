@@ -43,52 +43,6 @@
 DOCA_LOG_REGISTER(DMA_COPY_CORE);
 
 /*
- * Validate file size
- *
- * @file_path [in]: File to validate
- * @file_size [out]: File size
- * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
- */
-static doca_error_t
-validate_file_size(const char *file_path, uint32_t *file_size)
-{
-	FILE *fp;
-	long size;
-
-	fp = fopen(file_path, "r");
-	if (fp == NULL) {
-		DOCA_LOG_ERR("Failed to open %s", file_path);
-		return DOCA_ERROR_IO_FAILED;
-	}
-
-	if (fseek(fp, 0, SEEK_END) != 0) {
-		DOCA_LOG_ERR("Failed to calculate file size");
-		fclose(fp);
-		return DOCA_ERROR_IO_FAILED;
-	}
-
-	size = ftell(fp);
-	if (size == -1) {
-		DOCA_LOG_ERR("Failed to calculate file size");
-		fclose(fp);
-		return DOCA_ERROR_IO_FAILED;
-	}
-
-	fclose(fp);
-
-	if (size > MAX_DMA_BUF_SIZE) {
-		DOCA_LOG_ERR("File size of %ld is larger than DMA buffer maximum size of %d", size, MAX_DMA_BUF_SIZE);
-		return DOCA_ERROR_INVALID_VALUE;
-	}
-
-	DOCA_LOG_INFO("The file size is %ld", size);
-
-	*file_size = size;
-
-	return DOCA_SUCCESS;
-}
-
-/*
  * ARGP validation Callback - check if input file exists
  *
  * @config [in]: Program configuration context
@@ -99,9 +53,8 @@ args_validation_callback(void *config)
 {
 	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
 
-	if (access(cfg->file_path, F_OK | R_OK) == 0) {
+	if (cfg->file_size) {
 		cfg->is_file_found_locally = true;
-		return validate_file_size(cfg->file_path, &cfg->file_size);
 	}
 
 	return DOCA_SUCCESS;
@@ -138,19 +91,27 @@ dev_pci_addr_callback(void *param, void *config)
  * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
  */
 static doca_error_t
-file_path_callback(void *param, void *config)
+file_size_callback(void *param, void *config)
 {
 	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
-	char *file_path = (char *)param;
-	int file_path_len = strnlen(file_path, MAX_ARG_SIZE);
+	char *file_size = (char *)param;
 
-	if (file_path_len == MAX_ARG_SIZE) {
-		DOCA_LOG_ERR("Entered file path exceeded buffer size - MAX=%d", MAX_ARG_SIZE - 1);
+	if (isdigit(*file_size)) {
+		int file_size_value = *file_size - '0';
+		if (file_size_value > MAX_FILE_SIZE || file_size_value < 1) {
+			DOCA_LOG_INFO("Entered file size number is not within the range of 1 to %d", MAX_FILE_SIZE);
+			return DOCA_ERROR_INVALID_VALUE;
+		}
+	}
+	else{
+		DOCA_LOG_INFO("Entered file size is not a numerical value.");
 		return DOCA_ERROR_INVALID_VALUE;
 	}
 
-	strlcpy(cfg->file_path, file_path, MAX_ARG_SIZE);
+	strlcpy(cfg->file_path, file_size, MAX_FILE_SIZE);
+	cfg->file_size = (uint32_t)strtoul(cfg->file_path, NULL, 10);
 
+	DOCA_LOG_INFO("File size: %u\n", cfg->file_size);
 	return DOCA_SUCCESS;
 }
 
@@ -400,22 +361,21 @@ doca_error_t
 register_dma_copy_params(void)
 {
 	doca_error_t result;
-	struct doca_argp_param *file_path_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param, *workq_depth_param, *target_metric_param;
+	struct doca_argp_param *file_size_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param, *workq_depth_param, *target_metric_param;
 
 	/* Create and register string to dma copy param */
-	result = doca_argp_param_create(&file_path_param);
+	result = doca_argp_param_create(&file_size_param);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
 		return result;
 	}
-	doca_argp_param_set_short_name(file_path_param, "f");
-	doca_argp_param_set_long_name(file_path_param, "file");
-	doca_argp_param_set_description(file_path_param,
-					"Full path to file to be copied/created after a successful DMA copy");
-	doca_argp_param_set_callback(file_path_param, file_path_callback);
-	doca_argp_param_set_type(file_path_param, DOCA_ARGP_TYPE_STRING);
-	doca_argp_param_set_mandatory(file_path_param);
-	result = doca_argp_register_param(file_path_param);
+	doca_argp_param_set_short_name(file_size_param, "f");
+	doca_argp_param_set_long_name(file_size_param, "file size");
+	doca_argp_param_set_description(file_size_param,
+					"Size of the file to be transferred after a successful DMA copy");
+	doca_argp_param_set_callback(file_size_param, file_size_callback);
+	doca_argp_param_set_type(file_size_param, DOCA_ARGP_TYPE_STRING);
+	result = doca_argp_register_param(file_size_param);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
 		return result;

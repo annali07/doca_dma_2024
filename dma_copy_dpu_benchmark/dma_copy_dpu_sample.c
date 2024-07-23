@@ -73,36 +73,6 @@ send_status_msg(struct doca_comm_channel_ep_t *ep, struct doca_comm_channel_addr
 	return DOCA_SUCCESS;
 }
 
-
-/*
- * Fill local buffer with file content
- *
- * @cfg [in]: Application configuration
- * @buffer [out]: Buffer to save information into
- * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
- */
-static doca_error_t
-fill_buffer_with_file_content(struct dma_copy_cfg *cfg, char *buffer)
-{
-	FILE *fp;
-
-	fp = fopen(cfg->file_path, "r");
-	if (fp == NULL) {
-		DOCA_LOG_ERR("Failed to open %s", cfg->file_path);
-		return DOCA_ERROR_IO_FAILED;
-	}
-
-	/* Read file content and store it in the local buffer which will be exported */
-	if (fread(buffer, 1, cfg->file_size, fp) != cfg->file_size) {
-		DOCA_LOG_ERR("Failed to read content from file: %s", cfg->file_path);
-		fclose(fp);
-		return DOCA_ERROR_IO_FAILED;
-	}
-	fclose(fp);
-
-	return DOCA_SUCCESS;
-}
-
 /*
  * Allocate memory and populate it into the memory map
  *
@@ -542,20 +512,6 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
 			dpu_cleanup_core_objs(core_state);
 			free(buffer);
 			return result;
-		}
-
-		// Fill buffer in file content if relevant
-		if (dma_cfg->is_file_found_locally) {
-			result = fill_buffer_with_file_content(dma_cfg, buffer);
-			if (result != DOCA_SUCCESS) {
-				send_status_msg(ep, peer_addr, STATUS_FAILURE);
-				doca_buf_refcount_rm(local_doca_buf, NULL);
-				doca_buf_refcount_rm(remote_doca_buf, NULL);
-				doca_mmap_destroy(remote_mmap);
-				dpu_cleanup_core_objs(core_state);
-				free(buffer);
-				return result;
-			}
 		}
 
 		void *data;

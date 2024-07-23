@@ -31,7 +31,8 @@
 #define MAX_TARGET_METRIC 8
 #define DEFAULT_TARGET_METRIC 1
 #define MAX_FILE_SIZE 1048576
-#define DEFAULT_FILE_SIZE 64
+#define MAX_WORKQ_NUM 20
+#define DEFAULT_WORKQ_NUM 2
 #define SERVER_NAME "dma copy server"				/* Comm Channel service name */
 
 enum dma_copy_mode {
@@ -58,6 +59,7 @@ struct dma_copy_cfg {
 	char total_loop[8];
 	char workq_depth[8];
 	char target_metric[4];
+	char number_of_workq[4];
 };
 
 struct core_state {
@@ -66,7 +68,7 @@ struct core_state {
 	struct doca_buf_inventory *buf_inv;			/* DOCA buffer inventory */
 	struct doca_ctx *ctx;					/* DOCA context */
 	struct doca_dma *dma_ctx;				/* DOCA DMA context */
-	struct doca_workq *workq;				/* DOCA work queue */
+	struct doca_workq *workq_array[MAX_WORKQ_NUM];				/* DOCA work queue */
 };
 
 /*

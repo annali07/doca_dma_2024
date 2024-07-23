@@ -111,7 +111,7 @@ file_size_callback(void *param, void *config)
 	strlcpy(cfg->file_path, file_size, MAX_FILE_SIZE);
 	cfg->file_size = (uint32_t)strtoul(cfg->file_path, NULL, 10);
 
-	DOCA_LOG_INFO("File size: %u\n", cfg->file_size);
+	DOCA_LOG_INFO("File size: %u", cfg->file_size);
 	return DOCA_SUCCESS;
 }
 
@@ -224,6 +224,35 @@ target_metric_callback(void *param, void *config)
 		return DOCA_ERROR_INVALID_VALUE;
 	}
 	strlcpy(cfg->target_metric, target_metric, MAX_TARGET_METRIC);
+
+	return DOCA_SUCCESS;
+}
+
+/*
+ * ARGP Callback - Number of Workq
+ *
+ * @param [in]: Input parameter
+ * @config [in/out]: Program configuration context
+ * @return: DOCA_SUCCESS on success and DOCA_ERROR otherwise
+ */
+static doca_error_t
+workq_num_callback(void *param, void *config)
+{
+	struct dma_copy_cfg *cfg = (struct dma_copy_cfg *)config;
+	const char *workq_num = (char *)param;
+
+	if (isdigit(*workq_num)) {
+		int workq_num_value = *workq_num - '0';
+		if (workq_num_value > MAX_WORKQ_NUM || workq_num_value < 1) {
+			DOCA_LOG_INFO("Entered number of workq is not within the range of 1 to %d", MAX_WORKQ_NUM);
+			return DOCA_ERROR_INVALID_VALUE;
+		}
+	}
+	else{
+		DOCA_LOG_INFO("Entered number of workq is not a numerical value.");
+		return DOCA_ERROR_INVALID_VALUE;
+	}
+	strlcpy(cfg->number_of_workq, workq_num, MAX_WORKQ_NUM);
 
 	return DOCA_SUCCESS;
 }
@@ -361,7 +390,7 @@ doca_error_t
 register_dma_copy_params(void)
 {
 	doca_error_t result;
-	struct doca_argp_param *file_size_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param, *workq_depth_param, *target_metric_param;
+	struct doca_argp_param *file_size_param, *dev_pci_addr_param, *rep_pci_addr_param, *total_loop_param, *workq_depth_param, *target_metric_param, *num_of_workq_param;
 
 	/* Create and register string to dma copy param */
 	result = doca_argp_param_create(&file_size_param);
@@ -442,13 +471,31 @@ register_dma_copy_params(void)
 		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
 		return result;
 	}
-	doca_argp_param_set_short_name(workq_depth_param, "q");
+	doca_argp_param_set_short_name(workq_depth_param, "d");
 	doca_argp_param_set_long_name(workq_depth_param, "workq_depth");
 	doca_argp_param_set_description(workq_depth_param,
 					"The WorkQ depth of the operation");
 	doca_argp_param_set_callback(workq_depth_param, workq_depth_callback);
 	doca_argp_param_set_type(workq_depth_param, DOCA_ARGP_TYPE_STRING);
 	result = doca_argp_register_param(workq_depth_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
+		return result;
+	}
+
+	/* Create and register number of Workq */
+	result = doca_argp_param_create(&num_of_workq_param);
+	if (result != DOCA_SUCCESS) {
+		DOCA_LOG_ERR("Failed to create ARGP param: %s", doca_get_error_string(result));
+		return result;
+	}
+	doca_argp_param_set_short_name(num_of_workq_param, "q");
+	doca_argp_param_set_long_name(num_of_workq_param, "num_workq");
+	doca_argp_param_set_description(num_of_workq_param,
+					"The number of WorkQ");
+	doca_argp_param_set_callback(num_of_workq_param, workq_num_callback);
+	doca_argp_param_set_type(num_of_workq_param, DOCA_ARGP_TYPE_STRING);
+	result = doca_argp_register_param(num_of_workq_param);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to register program param: %s", doca_get_error_string(result));
 		return result;
@@ -541,10 +588,23 @@ create_core_objs(struct core_state *state, enum dma_copy_mode mode, struct dma_c
 		workq_depth = workq_depth_val;
 	}
 
-	result = doca_workq_create((uint32_t) workq_depth, &(state->workq));
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Unable to create work queue: %s", doca_get_error_string(result));
-		return result;
+	int workq_num;
+	int workq_num_val = atoi(dma_cfg->number_of_workq);
+	DOCA_LOG_INFO("Number of WorkQ is %d", workq_num_val);
+
+	if (workq_num_val == 0){
+		workq_num = DEFAULT_WORKQ_NUM;
+	}
+	else {
+		workq_num = workq_num_val;
+	}
+
+	for (int i = 0; i < workq_num; ++i){
+		result = doca_workq_create((uint32_t) workq_depth, &(state->workq_array[i]));
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Unable to create work queue: %s", doca_get_error_string(result));
+			return result;
+		}
 	}
 
 	return result;
@@ -582,11 +642,14 @@ init_core_objs(struct core_state *state, struct dma_copy_cfg *cfg)
 		return result;
 	}
 
-	result = doca_ctx_workq_add(state->ctx, state->workq);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Unable to register work queue with context: %s", doca_get_error_string(result));
-		return result;
-	}
+	int workq_num = atoi(cfg->number_of_workq);
+	for (int i = 0; i < workq_num; ++i) {
+        result = doca_ctx_workq_add(state->ctx, state->workq_array[i]);
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Unable to register work queue %d with context: %s", i, doca_get_error_string(result));
+            return result;
+        }
+    }
 
 	return result;
 }
@@ -597,10 +660,16 @@ destroy_core_objs(struct core_state *state, struct dma_copy_cfg *cfg)
 	doca_error_t result;
 
 	if (cfg->mode == DMA_COPY_MODE_DPU) {
-		result = doca_workq_destroy(state->workq);
-		if (result != DOCA_SUCCESS)
-			DOCA_LOG_ERR("Failed to destroy work queue: %s", doca_get_error_string(result));
-		state->workq = NULL;
+
+		for (int i = 0; i < MAX_WORKQ_NUM; ++i) {
+			if (state->workq_array[i] != NULL) {
+				result = doca_workq_destroy(state->workq_array[i]);
+				if (result != DOCA_SUCCESS) {
+					DOCA_LOG_ERR("Failed to destroy work queue %d: %s", i, doca_get_error_string(result));
+				}
+				state->workq_array[i] = NULL;
+			}
+    	}
 
 		result = doca_dma_destroy(state->dma_ctx);
 		if (result != DOCA_SUCCESS)

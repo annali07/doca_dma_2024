@@ -210,10 +210,16 @@ dpu_cleanup_core_objs(struct core_state *state)
 {
 	doca_error_t result;
 
-	result = doca_ctx_workq_rm(state->ctx, state->workq);
-	if (result != DOCA_SUCCESS)
-		DOCA_LOG_ERR("Failed to remove work queue from ctx: %s", doca_get_error_string(result));
-
+	// Remove all WorkQ from one ctx
+	for (int i = 0; i < MAX_WORKQ_NUM; ++i) {
+        if (state->workq_array[i] != NULL) {
+            result = doca_ctx_workq_rm(state->ctx, state->workq_array[i]);
+            if (result != DOCA_SUCCESS) {
+                DOCA_LOG_ERR("Failed to remove work queue %d from ctx: %s", i, doca_get_error_string(result));
+            }
+        }
+    }
+	
 	result = doca_ctx_stop(state->ctx);
 	if (result != DOCA_SUCCESS)
 		DOCA_LOG_ERR("Unable to stop DMA context: %s", doca_get_error_string(result));
@@ -377,14 +383,14 @@ dpu_submit_dma_job(struct dma_copy_cfg *cfg, struct core_state *core_state, char
 	dma_job.dst_buff = dst_buf;
 
 	/* Enqueue DMA job */
-	result = doca_workq_submit(core_state->workq, &dma_job.base);
+	result = doca_workq_submit(core_state->workq_array[1], &dma_job.base);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(result));
 		return result;
 	}
 
 	/* Wait for job completion */
-	while ((result = doca_workq_progress_retrieve(core_state->workq, &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+	while ((result = doca_workq_progress_retrieve(core_state->workq_array[1], &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
 	       DOCA_ERROR_AGAIN) {
 		nanosleep(&ts, &ts);
 	}
@@ -637,12 +643,11 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
             printf("Invalid target metric.\n");
             break;
     }
+	
 	free(latencies);
-
 	send_status_msg(ep, peer_addr, STATUS_SUCCESS);
 	doca_mmap_destroy(remote_mmap);
 	dpu_cleanup_core_objs(core_state);
-	
 	free(buffer);
 	return result;
 }

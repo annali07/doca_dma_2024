@@ -552,6 +552,7 @@ doca_error_t
 create_core_objs(struct core_state *state, enum dma_copy_mode mode, struct dma_copy_cfg *dma_cfg)
 {
 	doca_error_t result;
+	// int num_threads = atoi(dma_cfg->number_of_workq);
 	size_t num_elements = 2;
 
 	result = doca_mmap_create(NULL, &state->mmap);
@@ -563,11 +564,13 @@ create_core_objs(struct core_state *state, enum dma_copy_mode mode, struct dma_c
 	if (mode == DMA_COPY_MODE_HOST)
 		return DOCA_SUCCESS;
 
-	result = doca_buf_inventory_create(NULL, num_elements, DOCA_BUF_EXTENSION_NONE, &state->buf_inv);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Unable to create buffer inventory: %s", doca_get_error_string(result));
-		return result;
-	}
+	for (int i = 0; i < MAX_WORKQ_NUM; i++) {
+        result = doca_buf_inventory_create(NULL, num_elements, DOCA_BUF_EXTENSION_NONE, &state->buf_inv_array[i]);
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Unable to create buffer inventory for index %d: %s", i, doca_get_error_string(result));
+            return result; // Return the error to handle it upstream
+        }
+    }
 
 	result = doca_dma_create(&(state->dma_ctx));
 	if (result != DOCA_SUCCESS) {
@@ -624,11 +627,18 @@ init_core_objs(struct core_state *state, struct dma_copy_cfg *cfg)
 	if (cfg->mode == DMA_COPY_MODE_HOST)
 		return DOCA_SUCCESS;
 
-	result = doca_buf_inventory_start(state->buf_inv);
-	if (result != DOCA_SUCCESS) {
-		DOCA_LOG_ERR("Unable to start buffer inventory: %s", doca_get_error_string(result));
-		return result;
-	}
+	for (int i = 0; i < MAX_WORKQ_NUM; i++) {
+        if (state->buf_inv_array[i] == NULL) {
+            DOCA_LOG_ERR("Buffer inventory at index %d is NULL, skipping start operation.", i);
+            continue;
+        }
+
+        result = doca_buf_inventory_start(state->buf_inv_array[i]);
+        if (result != DOCA_SUCCESS) {
+            DOCA_LOG_ERR("Unable to start buffer inventory at index %d: %s", i, doca_get_error_string(result));
+            return result;
+        }
+    }
 
 	result = doca_ctx_dev_add(state->ctx, state->dev);
 	if (result != DOCA_SUCCESS) {
@@ -677,10 +687,18 @@ destroy_core_objs(struct core_state *state, struct dma_copy_cfg *cfg)
 		state->dma_ctx = NULL;
 		state->ctx = NULL;
 
-		result = doca_buf_inventory_destroy(state->buf_inv);
-		if (result != DOCA_SUCCESS)
-			DOCA_LOG_ERR("Failed to destroy buf inventory: %s", doca_get_error_string(result));
-		state->buf_inv = NULL;
+		for (int i = 0; i < MAX_WORKQ_NUM; i++) {
+			if (state->buf_inv_array[i] == NULL) {
+				continue; // Skip if already NULL
+			}
+
+			result = doca_buf_inventory_destroy(state->buf_inv_array[i]);
+			if (result != DOCA_SUCCESS) {
+				DOCA_LOG_ERR("Failed to destroy buffer inventory at index %d: %s", i, doca_get_error_string(result));
+				// Continue trying to destroy other inventories despite the error
+			}
+			state->buf_inv_array[i] = NULL; // Set to NULL regardless of the result to avoid dangling pointer
+		}
 	}
 
 	result = doca_mmap_destroy(state->mmap);

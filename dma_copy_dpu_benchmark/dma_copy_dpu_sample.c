@@ -18,6 +18,7 @@
 #include <errno.h>
 #include <sys/epoll.h>
 #include <unistd.h>
+#include <pthread.h>
 
 #include <doca_buf.h>
 #include <doca_buf_inventory.h>
@@ -40,7 +41,7 @@
 #define STATUS_SUCCESS true	   /* Successful status */
 #define STATUS_FAILURE false	   /* Unsuccessful status */
 
-DOCA_LOG_REGISTER(DMA_COPY_CORE);
+DOCA_LOG_REGISTER(DMA_COPY_SAMPLE);
 
 /*
  * Send status message
@@ -365,32 +366,24 @@ dpu_receive_addr_and_offset(struct doca_comm_channel_ep_t *ep, struct doca_comm_
  */
 static doca_error_t
 dpu_submit_dma_job(struct dma_copy_cfg *cfg, struct core_state *core_state, char *buffer,
-		   struct doca_buf *src_buf, struct doca_buf *dst_buf)
+			struct doca_dma_job_memcpy dma_job, int workq_index)
 {	
 	struct doca_event event = {0};
-	struct doca_dma_job_memcpy dma_job = {0};
 	struct timespec ts = {
 		.tv_sec = 0,
 		.tv_nsec = SLEEP_IN_NANOS,
 	};
 	doca_error_t result;
-	
-	/* Construct DMA job */
-	dma_job.base.type = DOCA_DMA_JOB_MEMCPY;
-	dma_job.base.flags = DOCA_JOB_FLAGS_NONE;
-	dma_job.base.ctx = core_state->ctx;
-	dma_job.src_buff = src_buf;
-	dma_job.dst_buff = dst_buf;
 
 	/* Enqueue DMA job */
-	result = doca_workq_submit(core_state->workq_array[1], &dma_job.base);
+	result = doca_workq_submit(core_state->workq_array[workq_index], &dma_job.base);
 	if (result != DOCA_SUCCESS) {
 		DOCA_LOG_ERR("Failed to submit DMA job: %s", doca_get_error_string(result));
 		return result;
 	}
 
 	/* Wait for job completion */
-	while ((result = doca_workq_progress_retrieve(core_state->workq_array[1], &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
+	while ((result = doca_workq_progress_retrieve(core_state->workq_array[workq_index], &event, DOCA_WORKQ_RETRIEVE_FLAGS_NONE)) ==
 	       DOCA_ERROR_AGAIN) {
 		nanosleep(&ts, &ts);
 	}
@@ -412,6 +405,138 @@ dpu_submit_dma_job(struct dma_copy_cfg *cfg, struct core_state *core_state, char
 	return result;
 }
 
+struct thread_args {
+    struct dma_copy_cfg *cfg;
+    struct core_state *core_state;
+	struct doca_mmap *remote_mmap;
+    char *buffer;
+	char *host_dma_addr;
+	size_t host_dma_offset;
+    int workq_index;
+	int requests;
+	double *latencies;
+	struct doca_comm_channel_ep_t *ep;
+	struct doca_comm_channel_addr_t **peer_addr;
+	struct doca_buf_inventory *buf_inv;	
+};
+
+void *handle_dpu_submit_job(void *arg)
+{	
+	doca_error_t result;
+	int counter = 0;
+	struct timespec start, stop;
+    double latency;
+    struct thread_args *targs = (struct thread_args *)arg;
+	
+	for (int i = 0; i < targs->requests; i++){
+		// Reinitialize buffer
+		struct doca_buf *remote_doca_buf;
+		struct doca_buf *local_doca_buf;
+
+		// Construct DOCA buffer for remote (Host) address range
+		result = doca_buf_inventory_buf_by_addr(targs->buf_inv, targs->remote_mmap, targs->host_dma_addr, targs->host_dma_offset,
+						&remote_doca_buf);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Unable to acquire DOCA remote buffer: %s", doca_get_error_string(result));
+			send_status_msg(targs->ep, targs->peer_addr, STATUS_FAILURE);
+			doca_mmap_destroy(targs->remote_mmap);
+			dpu_cleanup_core_objs(targs->core_state);
+			free(targs->buffer);
+			return NULL;
+
+		}
+
+		// Construct DOCA buffer for local (DPU) address range
+		result = doca_buf_inventory_buf_by_addr(targs->buf_inv, targs->core_state->mmap, targs->buffer, targs->host_dma_offset,
+							&local_doca_buf);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Unable to acquire DOCA local buffer: %s", doca_get_error_string(result));
+			send_status_msg(targs->ep, targs->peer_addr, STATUS_FAILURE);
+			doca_buf_refcount_rm(remote_doca_buf, NULL);
+			doca_mmap_destroy(targs->remote_mmap);
+			dpu_cleanup_core_objs(targs->core_state);
+			free(targs->buffer);
+			return NULL;
+
+		}
+
+		/* Set src and dst buffers */
+		void *data;
+		struct doca_buf *src_buf;
+		struct doca_buf *dst_buf;
+
+		/* Determine DMA copy direction */
+		if (targs->cfg->is_file_found_locally) {
+			src_buf = local_doca_buf;
+			dst_buf = remote_doca_buf;
+		} else {
+			src_buf = remote_doca_buf;
+			dst_buf = local_doca_buf;
+		}
+
+		/* Set data position in src_buf */
+		result = doca_buf_get_data(src_buf, &data);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Failed to get data address from DOCA buffer: %s", doca_get_error_string(result));
+			return NULL;
+		}
+
+		result = doca_buf_set_data(src_buf, data, targs->host_dma_offset);
+		if (result != DOCA_SUCCESS) {
+			DOCA_LOG_ERR("Failed to set data for DOCA buffer: %s", doca_get_error_string(result));
+			return NULL;
+		}
+
+		/* Construct DMA job */
+		struct doca_dma_job_memcpy dma_job = {0};
+		dma_job.base.type = DOCA_DMA_JOB_MEMCPY;
+		dma_job.base.flags = DOCA_JOB_FLAGS_NONE;
+		dma_job.base.ctx = targs->core_state->ctx;
+		dma_job.src_buff = src_buf;
+		dma_job.dst_buff = dst_buf;
+
+		if(clock_gettime(CLOCK_REALTIME, &start) == -1) {
+			perror("clock gettime");
+			return NULL;
+		}
+
+		// Submit DMA job into the queue and wait until job completion
+		result = dpu_submit_dma_job(targs->cfg, targs->core_state, targs->buffer, dma_job, targs->workq_index);
+		if (result != DOCA_SUCCESS) {
+			send_status_msg(targs->ep, targs->peer_addr, STATUS_FAILURE);
+			doca_buf_refcount_rm(local_doca_buf, NULL);
+			doca_buf_refcount_rm(remote_doca_buf, NULL);
+			doca_mmap_destroy(targs->remote_mmap);
+			dpu_cleanup_core_objs(targs->core_state);
+			free(targs->buffer);
+			return NULL;
+		}
+
+		if(clock_gettime(CLOCK_REALTIME, &stop) == -1) {
+			perror("clock gettime");
+			return NULL;
+		}
+
+		latency = (stop.tv_sec - start.tv_sec) * (double)BILLION
+			     + (double)(stop.tv_nsec - start.tv_nsec);
+		latency = latency / 1000.0;
+
+		int start_index = targs->workq_index * targs->requests;
+		targs->latencies[start_index + i] = latency;
+
+		doca_buf_refcount_rm(local_doca_buf, NULL);
+		doca_buf_refcount_rm(remote_doca_buf, NULL);
+
+		if(i % 1000 == 0){
+			counter++;
+			DOCA_LOG_INFO("%d / 1000 finished", counter);
+			
+		}
+	}
+
+    return NULL;
+}
+
 doca_error_t
 dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, struct doca_comm_channel_ep_t *ep,
 		   struct doca_comm_channel_addr_t **peer_addr)
@@ -423,19 +548,19 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
 	size_t host_dma_offset, export_desc_len;
 	doca_error_t result;
 
-	int total_loop_value = atoi(dma_cfg->total_loop);
-	DOCA_LOG_INFO("Total Trials is %d", total_loop_value);
+	int test_rounds = atoi(dma_cfg->total_loop);
+	DOCA_LOG_INFO("Total Trials is %d", test_rounds);
+	int num_threads = atoi(dma_cfg->number_of_workq);
+	DOCA_LOG_INFO("Number of WorkQ is %d", num_threads);
 	
-
-	struct timespec start, stop;
-    double latency, total_latency;
+    double total_latency;
     double *latencies;
-    int test_rounds;
-	if (total_loop_value == 0){
+
+	if (test_rounds == 0){
 		test_rounds = DEFAULT_LOOP_SIZE;
 	}
-	else {
-		test_rounds = total_loop_value;
+	if (num_threads == 0){
+		num_threads = 1;
 	}
 
 	/* Negotiate DMA copy direction with Host */
@@ -489,100 +614,32 @@ dpu_start_dma_copy(struct dma_copy_cfg *dma_cfg, struct core_state *core_state, 
 	     latencies[i] = 0;
 	}
 
-	int counter = 0;
-	for (int i = 0; i < test_rounds; ++i){
-		// Reinitialize buffer
-		struct doca_buf *remote_doca_buf;
-		struct doca_buf *local_doca_buf;
+	int requests_per_thread = test_rounds / num_threads;
+	pthread_t threads[num_threads];
+    struct thread_args targs[num_threads];
 
-		// Construct DOCA buffer for remote (Host) address range
-		result = doca_buf_inventory_buf_by_addr(core_state->buf_inv, remote_mmap, host_dma_addr, host_dma_offset,
-						&remote_doca_buf);
-		if (result != DOCA_SUCCESS) {
-			DOCA_LOG_ERR("Unable to acquire DOCA remote buffer: %s", doca_get_error_string(result));
-			send_status_msg(ep, peer_addr, STATUS_FAILURE);
-			doca_mmap_destroy(remote_mmap);
-			dpu_cleanup_core_objs(core_state);
-			free(buffer);
-			return result;
-		}
+	for (int j = 0; j < num_threads; j++) {
+            targs[j].cfg = dma_cfg;
+            targs[j].core_state = core_state;
+			targs[j].remote_mmap = remote_mmap;
+            targs[j].buffer = buffer;
+			targs[j].host_dma_addr = host_dma_addr;
+			targs[j].host_dma_offset = host_dma_offset;
+            targs[j].workq_index = j;
+			targs[j].requests = requests_per_thread;
+			targs[j].latencies = latencies;
+			targs[j].ep = ep;
+        	targs[j].peer_addr = peer_addr;
+			targs[j].buf_inv = core_state->buf_inv_array[j];
+            pthread_create(&threads[j], NULL, handle_dpu_submit_job, (void *)&targs[j]);
+    }
 
-		// Construct DOCA buffer for local (DPU) address range
-		result = doca_buf_inventory_buf_by_addr(core_state->buf_inv, core_state->mmap, buffer, host_dma_offset,
-							&local_doca_buf);
-		if (result != DOCA_SUCCESS) {
-			DOCA_LOG_ERR("Unable to acquire DOCA local buffer: %s", doca_get_error_string(result));
-			send_status_msg(ep, peer_addr, STATUS_FAILURE);
-			doca_buf_refcount_rm(remote_doca_buf, NULL);
-			doca_mmap_destroy(remote_mmap);
-			dpu_cleanup_core_objs(core_state);
-			free(buffer);
-			return result;
-		}
+	for (int j = 0; j < num_threads; j++) {
+		pthread_join(threads[j], NULL);
+	}
 
-		void *data;
-		struct doca_buf *src_buf;
-		struct doca_buf *dst_buf;
-
-		/* Determine DMA copy direction */
-		if (dma_cfg->is_file_found_locally) {
-			src_buf = local_doca_buf;
-			dst_buf = remote_doca_buf;
-		} else {
-			src_buf = remote_doca_buf;
-			dst_buf = local_doca_buf;
-		}
-
-		/* Set data position in src_buf */
-		result = doca_buf_get_data(src_buf, &data);
-		if (result != DOCA_SUCCESS) {
-			DOCA_LOG_ERR("Failed to get data address from DOCA buffer: %s", doca_get_error_string(result));
-			return result;
-		}
-
-		result = doca_buf_set_data(src_buf, data, host_dma_offset);
-		if (result != DOCA_SUCCESS) {
-			DOCA_LOG_ERR("Failed to set data for DOCA buffer: %s", doca_get_error_string(result));
-			return result;
-		}
-
-		if(clock_gettime(CLOCK_REALTIME, &start) == -1) {
-			perror("clock gettime");
-			return -1;
-		}
-
-		// Submit DMA job into the queue and wait until job completion
-		result = dpu_submit_dma_job(dma_cfg, core_state, buffer, src_buf, dst_buf);
-		if (result != DOCA_SUCCESS) {
-			send_status_msg(ep, peer_addr, STATUS_FAILURE);
-			doca_buf_refcount_rm(local_doca_buf, NULL);
-			doca_buf_refcount_rm(remote_doca_buf, NULL);
-			doca_mmap_destroy(remote_mmap);
-			dpu_cleanup_core_objs(core_state);
-			free(buffer);
-			return result;
-		}
-
-		if(clock_gettime(CLOCK_REALTIME, &stop) == -1) {
-			perror("clock gettime");
-			return -1;
-		}
-
-		latency = (stop.tv_sec - start.tv_sec) * (double)BILLION
-			     + (double)(stop.tv_nsec - start.tv_nsec);
-		latency = latency / 1000.0;
-
-		latencies[i] = latency;
-		total_latency += latency;
-
-		doca_buf_refcount_rm(local_doca_buf, NULL);
-		doca_buf_refcount_rm(remote_doca_buf, NULL);
-
-		if(i % 1000 == 0){
-			counter++;
-			DOCA_LOG_INFO("%d / 1000 finished", counter);
-			
-		}	
+	for (int i = 0; i < test_rounds; i++){
+		total_latency += latencies[i];
 	}
 	
 	int target_metric_value = atoi(dma_cfg->target_metric);

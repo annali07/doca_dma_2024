@@ -14,4 +14,4 @@ cd dma_copy_dpu_benchmark
 
 # Step 5: Execute the built executable with the specified arguments
 
-./doca_dma_copy_dpu_benchmark -p 03:00.1 -r e1:00.1 -l 10000 -d 50 -t 1 -f 8 -q 10
+./doca_dma_copy_dpu_benchmark -p 03:00.1 -r e1:00.1 -l 10000 -d 1 -t 1 -f 8 -q 10

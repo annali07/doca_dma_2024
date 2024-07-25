@@ -65,7 +65,7 @@ struct dma_copy_cfg {
 struct core_state {
 	struct doca_dev *dev;					/* DOCA device */
 	struct doca_mmap *mmap;					/* DOCA memory map */
-	struct doca_buf_inventory *buf_inv;			/* DOCA buffer inventory */
+	struct doca_buf_inventory *buf_inv_array[MAX_WORKQ_NUM];			/* DOCA buffer inventory */
 	struct doca_ctx *ctx;					/* DOCA context */
 	struct doca_dma *dma_ctx;				/* DOCA DMA context */
 	struct doca_workq *workq_array[MAX_WORKQ_NUM];				/* DOCA work queue */

@@ -1,5 +1,26 @@
 #!/bin/bash
 
+
+ssh_into_host() {
+    echo "Starting SSH into farnet1..."
+    ssh $FARNET1_USER@$FARNET1_IP "bash -s" << 'EOF' &
+    echo "Connected to farnet1..."
+    cd transfer/doca_dma_2024
+    echo $FARNET1_SCRIPT
+    pwd
+    echo "Running host.sh..."
+    ./host.sh
+    exit
+EOF
+    echo "SSH session to farnet1 initiated."
+}
+
+# Run SSH into farnet1 in the background
+ssh_into_host
+
+# Give the server some time to start
+sleep 20
+
 # Step 1: Run meson build
 meson build
 
